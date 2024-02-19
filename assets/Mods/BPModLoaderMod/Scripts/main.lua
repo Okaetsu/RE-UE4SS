@@ -257,6 +257,8 @@ local function CacheAssetRegistry()
     error("AssetRegistry is not valid\n")
 end
 
+print("NOTE: This is intended to be a temporary workaround for Dedicated Server LogicMods issues\n")
+
 -- Keep in mind this will only work for Palworld.
 -- If for whatever reason this is adapted for something else, use LiveView and find the first valid actor instance in the world and replace BP_PalMapObjectManager_C with that.
 local function GetWorldFromWorldObject()
