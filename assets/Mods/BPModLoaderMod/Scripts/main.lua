@@ -1,3 +1,7 @@
+-- THIS IS A TEMPORARY FIX FOR LOGICMODS NOT LOADING ON SERVERS UNTIL A NEW UPDATE TO UE4SS IS BEING PUSHED (SOONTM)
+-- DO NOT USE THIS OUTSIDE OF DEDICATED SERVERS, IT IS ONLY RELIABLE FOR SERVER USE
+-- ONCE THE ISSUE IS FIXED IN UE4SS ITSELF, YOU WONT NEED THIS WORKAROUND ANYMORE SO MAKE SURE TO REPLACE THIS FILE WITH THE ORIGINAL FILE
+
 local UEHelpers = require("UEHelpers")
 
 local VerboseLogging = false
@@ -174,6 +178,8 @@ end
 local AssetRegistryHelpers = nil
 local AssetRegistry = nil
 
+local ModsToRevalidate = {}
+
 local function LoadMod(ModName, ModInfo, World)
     if ModInfo.Priority ~= nil then
         Log(string.format("Loading mod [Priority: #%i]: %s\n", ModInfo.Priority, ModName))
@@ -183,7 +189,7 @@ local function LoadMod(ModName, ModInfo, World)
 
     if ModInfo.AssetPath == nil or ModInfo.AssetPath == nil then
         Log(string.format("Could not load mod '%s' because it has no asset path or name.\n", ModName))
-        return
+        return true
     end
 
     local AssetData = nil
@@ -198,32 +204,40 @@ local function LoadMod(ModName, ModInfo, World)
         }
     end
 
-    ExecuteInGameThread(function()
-        local ModClass = AssetRegistryHelpers:GetAsset(AssetData)
-        if not ModClass:IsValid() then
-			local ObjectPath = AssetData.ObjectPath and AssetData.ObjectPath:ToString() or ""
-			local PackageName = AssetData.PackageName and AssetData.PackageName:ToString() or ""
-			local AssetName = AssetData.AssetName and AssetData.AssetName:ToString() or ""
-			Log(string.format("ModClass for '%s' is not valid\nObjectPath: %s\nPackageName: %s\nAssetName: %s", ModName, ObjectPath,PackageName, AssetName))
-			return
-		end
+    local ModClass = AssetRegistryHelpers:GetAsset(AssetData)
+    if not ModClass:IsValid() then
+        local ObjectPath = AssetData.ObjectPath and AssetData.ObjectPath:ToString() or ""
+        local PackageName = AssetData.PackageName and AssetData.PackageName:ToString() or ""
+        local AssetName = AssetData.AssetName and AssetData.AssetName:ToString() or ""
+        Log(string.format("ModClass for '%s' is not valid\nObjectPath: %s\nPackageName: %s\nAssetName: %s", ModName, ObjectPath,PackageName, AssetName))
+        return true
+    end
 
-        if not World:IsValid() then Log(string.format("World is not valid for '%s' to spawn in", ModName)) return end
+    if not World:IsValid() then Log(string.format("World is not valid for '%s' to spawn in", ModName)) return false end
 
-        local Actor = World:SpawnActor(ModClass, {}, {})
-        if not Actor:IsValid() then
-            Log(string.format("Actor for mod '%s' is not valid\n", ModName))
-        else
-            Log(string.format("Actor: %s\n", Actor:GetFullName()))
-            local PreBeginPlay = Actor.PreBeginPlay
-            if PreBeginPlay:IsValid() then
-                Log(string.format("Executing 'PreBeginPlay' for mod '%s', with path: '%s'\n", ModName, Actor:GetFullName()))
-                PreBeginPlay()
-            else
-                Log(string.format("PreBeginPlay not valid for mod %s\n", ModName), true)
-            end
+    local Actor = World:SpawnActor(ModClass, {}, {})
+    if not Actor:IsValid() then
+        Log(string.format("Actor for mod '%s' is not valid, retrying...\n", ModName))
+        if ModsToRevalidate[ModName] == nil then
+            ModsToRevalidate[ModName] = ModInfo
         end
-    end)
+        return false
+    else
+        if ModsToRevalidate[ModName] ~= nil then
+            ModsToRevalidate[ModName] = nil
+        end
+
+        Log(string.format("Actor: %s\n", Actor:GetFullName()))
+        local PreBeginPlay = Actor.PreBeginPlay
+        if PreBeginPlay:IsValid() then
+            Log(string.format("Executing 'PreBeginPlay' for mod '%s', with path: '%s'\n", ModName, Actor:GetFullName()))
+            PreBeginPlay()
+        else
+            Log(string.format("PreBeginPlay not valid for mod %s\n", ModName), true)
+        end
+
+        return true
+    end
 end
 
 local function CacheAssetRegistry()
@@ -243,23 +257,97 @@ local function CacheAssetRegistry()
     error("AssetRegistry is not valid\n")
 end
 
+-- Keep in mind this will only work for Palworld.
+-- If for whatever reason this is adapted for something else, use LiveView and find the first valid actor instance in the world and replace BP_PalMapObjectManager_C with that.
+local function GetWorldFromWorldObject()
+    local WorldObject = FindFirstOf("BP_PalMapObjectManager_C")
+    if WorldObject ~= nil and WorldObject:IsValid() then
+        local World = WorldObject:GetWorld()
+        if World ~= nil and World:IsValid() then
+           return World
+        end
+    end
+    return nil
+end
 
+local LoadDelayTime = 2500
+
+local function LoadModsDelayed()
+    ExecuteInGameThread(function ()
+        WasSuccessful = true
+
+        local World = GetWorldFromWorldObject()
+        if World ~= nil and World:IsValid() then
+            print("[BPModLoaderMod] Failed to load LogicMods, retrying...\n")
+            for ModName, ModInfo in pairs(ModsToRevalidate) do
+                if type(ModInfo) == "table" then
+                    if LoadMod(ModName, ModInfo, World) == false then
+                        WasSuccessful = false
+                    end
+                end
+            end
+        else
+            print("[BPModLoaderMod] World was invalid, retrying...\n")
+            WasSuccessful = false
+        end
+
+        if WasSuccessful == false then
+            ExecuteWithDelay(LoadDelayTime, function ()
+                LoadModsDelayed()
+            end)
+        else
+            print("Finished loading LogicMods!\n")
+        end
+    end)
+end
 
 local function LoadMods(World)
     CacheAssetRegistry()
-    for _, ModInfo in ipairs(OrderedMods) do
-        if type(ModInfo) == "table" then
-            LoadMod(ModInfo.Name, ModInfo, World)
+    -- Added ExecuteInGameThread here instead so it's easier to get the final result from LoadMod
+    ExecuteInGameThread(function()
+        local WasSuccessful = true
+        for _, ModInfo in ipairs(OrderedMods) do
+            if type(ModInfo) == "table" then
+                if LoadMod(ModInfo.Name, ModInfo, World) == false then
+                    WasSuccessful = false
+                end
+            end
         end
+
+        if WasSuccessful == false then
+            ExecuteWithDelay(LoadDelayTime, function ()
+                LoadModsDelayed()
+            end)
+        else
+            print("Finished loading mods!\n")
+        end
+    end)
+end
+
+local function TryLoadMods()
+    local World = GetWorldFromWorldObject()
+    if World ~= nil and World:IsValid() then
+        LoadMods(World)
+    else
+        print("[BPModLoaderMod] World was invalid, retrying...\n")
+        ExecuteWithDelay(LoadDelayTime, function ()
+            TryLoadMods()
+        end)
     end
 end
+
+-- The workaround is to add a manual delay for loading the mods because the typical 'RegisterLoadMapPostHook' is most likely being missed from UE4SS due to the map loading before the hook is even registered.
+ExecuteWithDelay(LoadDelayTime, function ()
+    TryLoadMods()
+end)
 
 local function LoadModsManual()
     LoadMods(UEHelpers.GetWorld())
 end
 
+-- Commented out for now since we're doing a delayed load instead
 RegisterLoadMapPostHook(function(Engine, World)
-    LoadMods(World:get())
+    --LoadMods(World:get())
 end)
 
 RegisterBeginPlayPostHook(function(ContextParam)
