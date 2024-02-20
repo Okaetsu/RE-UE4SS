@@ -181,6 +181,22 @@ local AssetRegistry = nil
 local ModsToRevalidate = {}
 
 local function LoadMod(ModName, ModInfo, World)
+    local ExistingModActor = ModRef:GetSharedVariable("BPModLoaderMod_" .. ModName)
+
+    if ExistingModActor ~= nil and ExistingModActor:IsValid() then
+        print("ModActor " .. ModName .. " already exists.\n")
+
+        local OnReload = ExistingModActor.OnReload
+        if OnReload:IsValid() then
+            Log(string.format("Executing 'OnReload' for mod '%s', with path: '%s'\n", ModName, ExistingModActor:GetFullName()))
+            OnReload()
+        else
+            Log(string.format("OnReload not implemented for mod %s, skipping...\n", ModName), true)
+        end
+
+        return true
+    end
+
     if ModInfo.Priority ~= nil then
         Log(string.format("Loading mod [Priority: #%i]: %s\n", ModInfo.Priority, ModName))
     else
@@ -226,6 +242,8 @@ local function LoadMod(ModName, ModInfo, World)
         if ModsToRevalidate[ModName] ~= nil then
             ModsToRevalidate[ModName] = nil
         end
+
+        ModRef:SetSharedVariable("BPModLoaderMod_" .. ModName, Actor)
 
         Log(string.format("Actor: %s\n", Actor:GetFullName()))
         local PreBeginPlay = Actor.PreBeginPlay
