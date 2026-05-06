@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <string>
@@ -164,7 +165,7 @@ namespace RC
         std::jthread m_async_thread;
         std::thread::id m_main_thread_id{};
         bool m_processing_events{};
-        bool m_pause_events_processing{};
+        std::atomic<bool> m_pause_events_processing{};
         bool m_is_process_event_hooked{};
         static inline bool m_is_engine_tick_hooked{};
         std::mutex m_actions_lock{};
