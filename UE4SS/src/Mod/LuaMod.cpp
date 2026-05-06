@@ -2626,7 +2626,24 @@ Overloads:
                         try
                         {
                             std::error_code ec;
-                            for (const auto& item : std::filesystem::directory_iterator(directory, ec))
+                            std::filesystem::directory_iterator iter;
+                            try
+                            {
+                                iter = std::filesystem::directory_iterator(directory, std::filesystem::directory_options::skip_permission_denied, ec);
+                            }
+                            catch (const std::exception& e)
+                            {
+                                Output::send<LogLevel::Error>(STR("Exception creating directory iterator for {}: {}\n"), directory.wstring(), to_wstring(e.what()));
+                                return;
+                            }
+
+                            if (ec)
+                            {
+                                Output::send<LogLevel::Error>(STR("Error creating directory iterator for {}: {}\n"), directory.wstring(), to_wstring(ec.message()));
+                                return;
+                            }
+
+                            for (const auto& item : iter)
                             {
                                 try
                                 {
@@ -2640,15 +2657,14 @@ Overloads:
                                         continue;
                                     }
 
-                                    
                                     auto path = item.path().filename();
-                                    
                                     auto path_str = path.string();
-                                    if (path_str == "dosdevices" || path_str == "drive_c" || path_str == "proc" || path_str == "sys")
+                                    if (path_str == "dosdevices" || path_str == "drive_c" || path_str == "proc" || path_str == "sys" ||
+                                        path_str == ".snapshots" || path_str == "dev" || path_str == "run" || path_str == "tmp" ||
+                                        path_str == "boot" || path_str == "lost+found")
                                     {
                                         continue;
                                     }
-
 
                                     // Set key to "Game" if this is the game directory, otherwise use the actual name
                                     std::string table_key;
@@ -2796,7 +2812,24 @@ Overloads:
                                             std::error_code ec;
                                             if (std::filesystem::exists(path_wstr, ec))
                                             {
-                                                for (const auto& item : std::filesystem::directory_iterator(path_wstr, ec))
+                                                std::filesystem::directory_iterator iter;
+                                                try
+                                                {
+                                                    iter = std::filesystem::directory_iterator(path_wstr, std::filesystem::directory_options::skip_permission_denied, ec);
+                                                }
+                                                catch (const std::exception& e)
+                                                {
+                                                    Output::send<LogLevel::Error>(STR("Exception creating directory iterator for {}: {}\n"), path_wstr, to_wstring(e.what()));
+                                                    return 1;
+                                                }
+
+                                                if (ec)
+                                                {
+                                                    Output::send<LogLevel::Error>(STR("Error creating directory iterator for {}: {}\n"), path_wstr, to_wstring(ec.message()));
+                                                    return 1;
+                                                }
+
+                                                for (const auto& item : iter)
                                                 {
                                                     try
                                                     {
@@ -2813,8 +2846,8 @@ Overloads:
                                                             file_table.add_pair("__name", safe_filename.c_str());
                                                             file_table.add_pair("__absolute_path", safe_path.c_str());
                                                             files_table.fuse_pair();
+                                                            ++index;
                                                         }
-                                                        ++index;
                                                     }
                                                     catch (const std::exception& e)
                                                     {
