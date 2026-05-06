@@ -164,7 +164,7 @@ namespace RC
 
         bool m_has_game_specific_config{};
         bool m_processing_events{};
-        bool m_pause_events_processing{};
+        std::atomic<bool> m_pause_events_processing{};
         bool m_custom_member_variable_layout_loaded{};
 
       public:
@@ -238,6 +238,7 @@ namespace RC
         auto get_object_dumper_output_directory() -> const File::StringType;
         RC_UE4SS_API auto get_module_directory() -> File::StringType;
         RC_UE4SS_API auto get_game_executable_directory() -> File::StringType;
+        RC_UE4SS_API auto get_logic_mods_directory() -> std::filesystem::path;
         RC_UE4SS_API auto get_working_directory() -> File::StringType;
         RC_UE4SS_API auto get_mods_directory() -> File::StringType;
         RC_UE4SS_API auto get_mods_directories() -> std::vector<std::filesystem::path>&;

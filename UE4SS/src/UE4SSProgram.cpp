@@ -1097,6 +1097,7 @@ namespace RC
         {
             if (m_pause_events_processing || UE4SSProgram::unreal_is_shutting_down)
             {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
                 continue;
             }
 
@@ -1959,6 +1960,25 @@ namespace RC
     auto UE4SSProgram::get_game_executable_directory() -> File::StringType
     {
         return ensure_str(m_game_executable_directory);
+    }
+
+    auto UE4SSProgram::get_logic_mods_directory() -> std::filesystem::path
+    {
+        std::filesystem::path logic_mods_dir = m_game_executable_directory;
+        logic_mods_dir = logic_mods_dir.parent_path().parent_path();
+        logic_mods_dir /= "Content/Paks/LogicMods";
+
+        std::error_code ec;
+        if (!std::filesystem::exists(logic_mods_dir, ec))
+        {
+            std::filesystem::create_directories(logic_mods_dir, ec);
+            if (ec)
+            {
+                Output::send<LogLevel::Error>(STR("Failed to create LogicMods directory: {}\n"), to_wstring(ec.message()));
+            }
+        }
+
+        return logic_mods_dir;
     }
 
     auto UE4SSProgram::get_working_directory() -> File::StringType
