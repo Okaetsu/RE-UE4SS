@@ -700,7 +700,8 @@ namespace RC
     }
 
     LuaMod::LuaMod(UE4SSProgram& program, StringType&& mod_name, StringType&& mod_path)
-        : Mod(program, std::move(mod_name), std::move(mod_path)), m_lua(LuaMadeSimple::new_state())
+        : Mod(program, std::move(mod_name), std::move(mod_path)), m_lua(LuaMadeSimple::new_state()),
+          m_hook_lua_ref(LUA_REFNIL), m_main_lua_ref(LUA_REFNIL), m_async_lua_ref(LUA_REFNIL)
     {
         // First check for "Scripts" (capital S)
         std::filesystem::path scripts_path = m_mod_path / STR("Scripts");

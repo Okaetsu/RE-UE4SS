@@ -36,6 +36,10 @@ namespace RC
         std::filesystem::path m_scripts_path;
         LuaMadeSimple::Lua& m_lua;
 
+        int m_hook_lua_ref{LUA_REFNIL};
+        int m_main_lua_ref{LUA_REFNIL};
+        int m_async_lua_ref{LUA_REFNIL};
+
       public:
         LuaMadeSimple::Lua* m_hook_lua = nullptr;
         LuaMadeSimple::Lua* m_main_lua{};
