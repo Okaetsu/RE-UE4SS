@@ -79,3 +79,6 @@ vsxmake2022
 
 # xwin
 xwin/*
+
+# AI Agent files
+docs/superpowers/
