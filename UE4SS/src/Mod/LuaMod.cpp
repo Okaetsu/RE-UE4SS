@@ -3816,6 +3816,22 @@ Overloads:
     {
         std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
 
+        if (!LuaMod::m_pending_game_thread_actions.empty())
+        {
+            LuaMod::m_game_thread_actions.insert(LuaMod::m_game_thread_actions.end(),
+                                                 std::make_move_iterator(LuaMod::m_pending_game_thread_actions.begin()),
+                                                 std::make_move_iterator(LuaMod::m_pending_game_thread_actions.end()));
+            LuaMod::m_pending_game_thread_actions.clear();
+        }
+
+        if (!LuaMod::m_pending_delayed_game_thread_actions.empty())
+        {
+            LuaMod::m_delayed_game_thread_actions.insert(LuaMod::m_delayed_game_thread_actions.end(),
+                                                         std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.begin()),
+                                                         std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.end()));
+            LuaMod::m_pending_delayed_game_thread_actions.clear();
+        }
+
         process_simple_actions(LuaMod::m_game_thread_actions);
         process_delayed_actions<GameThreadExecutionMethod::ProcessEvent>(LuaMod::m_delayed_game_thread_actions);
     }
@@ -3826,6 +3842,22 @@ Overloads:
                                  [[maybe_unused]] bool bIdle) -> void
     {
         std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+
+        if (!LuaMod::m_pending_engine_tick_actions.empty())
+        {
+            LuaMod::m_engine_tick_actions.insert(LuaMod::m_engine_tick_actions.end(),
+                                                 std::make_move_iterator(LuaMod::m_pending_engine_tick_actions.begin()),
+                                                 std::make_move_iterator(LuaMod::m_pending_engine_tick_actions.end()));
+            LuaMod::m_pending_engine_tick_actions.clear();
+        }
+
+        if (!LuaMod::m_pending_delayed_game_thread_actions.empty())
+        {
+            LuaMod::m_delayed_game_thread_actions.insert(LuaMod::m_delayed_game_thread_actions.end(),
+                                                         std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.begin()),
+                                                         std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.end()));
+            LuaMod::m_pending_delayed_game_thread_actions.clear();
+        }
 
         process_simple_actions(LuaMod::m_engine_tick_actions);
         process_delayed_actions<GameThreadExecutionMethod::EngineTick>(LuaMod::m_delayed_game_thread_actions);
@@ -4048,11 +4080,13 @@ Overloads:
                 std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
                 if (method == GameThreadExecutionMethod::EngineTick)
                 {
-                    LuaMod::m_engine_tick_actions.emplace_back(simpleAction);
+                    (LuaMod::m_is_currently_executing_game_action ? LuaMod::m_pending_engine_tick_actions : LuaMod::m_engine_tick_actions)
+                            .emplace_back(simpleAction);
                 }
                 else
                 {
-                    mod->m_game_thread_actions.emplace_back(simpleAction);
+                    (LuaMod::m_is_currently_executing_game_action ? LuaMod::m_pending_game_thread_actions : LuaMod::m_game_thread_actions)
+                            .emplace_back(simpleAction);
                 }
             }
 
@@ -4149,7 +4183,8 @@ Overloads:
 
                 {
                     std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
-                    LuaMod::m_delayed_game_thread_actions.emplace_back(action);
+                    (LuaMod::m_is_currently_executing_game_action ? LuaMod::m_pending_delayed_game_thread_actions : LuaMod::m_delayed_game_thread_actions)
+                            .emplace_back(action);
                 }
 
                 return 0;
@@ -4175,7 +4210,8 @@ Overloads:
 
                 {
                     std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
-                    LuaMod::m_delayed_game_thread_actions.emplace_back(action);
+                    (LuaMod::m_is_currently_executing_game_action ? LuaMod::m_pending_delayed_game_thread_actions : LuaMod::m_delayed_game_thread_actions)
+                            .emplace_back(action);
                 }
 
                 lua.set_integer(action.handle);
@@ -4267,7 +4303,8 @@ Overloads:
 
             {
                 std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
-                LuaMod::m_delayed_game_thread_actions.emplace_back(action);
+                (LuaMod::m_is_currently_executing_game_action ? LuaMod::m_pending_delayed_game_thread_actions : LuaMod::m_delayed_game_thread_actions)
+                        .emplace_back(action);
             }
 
             return 0;
@@ -4311,7 +4348,8 @@ Overloads:
 
             {
                 std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
-                LuaMod::m_delayed_game_thread_actions.emplace_back(action);
+                (LuaMod::m_is_currently_executing_game_action ? LuaMod::m_pending_delayed_game_thread_actions : LuaMod::m_delayed_game_thread_actions)
+                        .emplace_back(action);
                 LuaMod::ensure_engine_tick_hooked();
             }
 
@@ -4383,7 +4421,8 @@ Overloads:
 
             {
                 std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
-                LuaMod::m_delayed_game_thread_actions.emplace_back(action);
+                (LuaMod::m_is_currently_executing_game_action ? LuaMod::m_pending_delayed_game_thread_actions : LuaMod::m_delayed_game_thread_actions)
+                        .emplace_back(action);
             }
 
             lua.set_integer(action.handle);
@@ -4430,7 +4469,8 @@ Overloads:
 
             {
                 std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
-                LuaMod::m_delayed_game_thread_actions.emplace_back(action);
+                (LuaMod::m_is_currently_executing_game_action ? LuaMod::m_pending_delayed_game_thread_actions : LuaMod::m_delayed_game_thread_actions)
+                        .emplace_back(action);
                 LuaMod::ensure_engine_tick_hooked();
             }
 
