@@ -1,5 +1,6 @@
 #define NOMINMAX
 
+#include <algorithm>
 #include <atomic>
 #include <filesystem>
 #include <format>
@@ -266,8 +267,6 @@ namespace RC
                 {
                     luaL_unref(lua_state, LUA_REGISTRYINDEX, lua_post_callback_ref);
                 }
-
-                luaL_unref(mod->lua().get_lua_state(), LUA_REGISTRYINDEX, lua_thread_ref);
 
                 return true;
             }
@@ -754,7 +753,10 @@ namespace RC
         // property_type_table.add_pair("Size", PropertyType::size);
         //  This should be a lightuserdata instead of a reinterpret_cast to int64_t
         //  This is not very safe at all, what if the pointer is too large for a signed 64-bit integer ?
-        property_type_table.add_pair("FFieldClassPointer", static_cast<int64_t>(PropertyType::StaticClass().HashObject()));
+        void* ffield_class_ptr = reinterpret_cast<void*>(PropertyType::StaticClass().HashObject());
+        lua_pushlightuserdata(lua.get_lua_state(), ffield_class_ptr);
+        lua_setfield(lua.get_lua_state(), -2, "FFieldClassPointer");
+
         // TODO: Figure out if the static object pointer is needed
         property_type_table.add_pair("StaticPointer", 0);
 
@@ -763,19 +765,17 @@ namespace RC
         property_type_table.make_local();
     }
 
-    // Private helper: Ensures hook thread exists and returns the registry reference (or LUA_REFNIL if already exists)
+    // Private helper: Ensures hook thread exists and returns the registry reference
     static int ensure_hook_thread_exists(LuaMod* mod)
     {
         if (mod->m_hook_lua == nullptr)
         {
             // First use - create new thread and anchor it in the registry
             mod->m_hook_lua = &mod->lua().new_thread();
-            int thread_ref = luaL_ref(mod->lua().get_lua_state(), LUA_REGISTRYINDEX);
-            return thread_ref;
+            mod->m_hook_lua_ref = luaL_ref(mod->lua().get_lua_state(), LUA_REGISTRYINDEX);
         }
 
-        // Thread already exists and is already anchored
-        return LUA_REFNIL;
+        return mod->m_hook_lua_ref;
     }
 
     // Returns the hook lua thread for immediate use (doesn't need registry reference management)
@@ -817,10 +817,7 @@ namespace RC
         if (!mod->m_async_lua)
         {
             mod->m_async_lua = &lua.new_thread();
-
-            // Make the hook thread (which is just a separate Lua stack) be a global in its parent.
-            // This is needed because otherwise it will be GCd when we don't want it to.
-            lua_setglobal(lua.get_lua_state(), "AsyncThread");
+            mod->m_async_lua_ref = luaL_ref(lua.get_lua_state(), LUA_REGISTRYINDEX);
 
             // Commenting out until we switch to lua_newstate instead of lua_newthread.
             // For the switch to happen, we need to be able to move or copy Lua types across lua_states which we can't do yet.
@@ -843,10 +840,7 @@ namespace RC
         if (!mod->m_main_lua)
         {
             mod->m_main_lua = &lua.new_thread();
-
-            // Make the hook thread (which is just a separate Lua stack) be a global in its parent.
-            // This is needed because otherwise it will be GCd when we don't want it to.
-            lua_setglobal(lua.get_lua_state(), "MainThread");
+            mod->m_main_lua_ref = luaL_ref(lua.get_lua_state(), LUA_REGISTRYINDEX);
 
             // Commenting out until we switch to lua_newstate instead of lua_newthread.
             // For the switch to happen, we need to be able to move or copy Lua types across lua_states which we can't do yet.
@@ -996,7 +990,26 @@ namespace RC
                 attempted_paths_str += "\n\t" + path + " (encoding error)";
                 continue;
             }
-            
+
+            // Secure validation: prevent path traversal
+            std::filesystem::path absolute_path = std::filesystem::absolute(wide_path).lexically_normal();
+            std::filesystem::path base_dir;
+            if (path.find(scripts_path_str) == 0)
+            {
+                base_dir = std::filesystem::absolute(scripts_path).lexically_normal();
+            }
+            else
+            {
+                base_dir = std::filesystem::absolute(mods_dir).lexically_normal();
+            }
+
+            auto [base_end, _] = std::mismatch(base_dir.begin(), base_dir.end(), absolute_path.begin(), absolute_path.end());
+            if (base_end != base_dir.end())
+            {
+                attempted_paths_str += "\n\t" + path + " (security: path traversal blocked)";
+                continue;
+            }
+
             if (!std::filesystem::exists(wide_path))
             {
                 attempted_paths_str += "\n\t" + path;
@@ -2136,12 +2149,22 @@ Overloads:
                 return static_cast<int32_t>(integer);
             };
 
+            auto get_lightuserdata_field = [&](LuaMadeSimple::Lua::Table& table, const char* key) -> void* {
+                lua_getfield(table.get_lua_instance().get_lua_state(), -1, key);
+                void* ptr = lua_touserdata(table.get_lua_instance().get_lua_state(), -1);
+                lua_pop(table.get_lua_instance().get_lua_state(), 1);
+                return ptr;
+            };
+
             // Always required, for all property types
             property_info.name = ensure_str(lua_table.get_string_field("Name"));
-            property_info.type.name = lua_table.get_table_field("Type").get_string_field("Name");
-            property_info.type.size = verify_and_convert_int64_to_int32("Type", "Size");
-            property_info.type.ffieldclass_pointer = reinterpret_cast<void*>(lua_table.get_table_field("Type").get_int_field("FFieldClassPointer"));
-            property_info.type.static_pointer = reinterpret_cast<void*>(lua_table.get_table_field("Type").get_int_field("StaticPointer"));
+            {
+                auto type_table = lua_table.get_table_field("Type");
+                property_info.type.name = type_table.get_string_field("Name");
+                property_info.type.size = verify_and_convert_int64_to_int32("Type", "Size");
+                property_info.type.ffieldclass_pointer = get_lightuserdata_field(type_table, "FFieldClassPointer");
+                property_info.type.static_pointer = reinterpret_cast<void*>(type_table.get_int_field("StaticPointer"));
+            }
             property_info.belongs_to_class = ensure_str(lua_table.get_string_field("BelongsToClass"));
 
             std::string oi_property_name;
@@ -2171,12 +2194,11 @@ Overloads:
                 else
                 {
                     property_info.set_is_array_property();
-                    property_info.array_inner.name = lua_table.get_table_field("ArrayProperty").get_table_field("Type").get_string_field("Name");
+                    auto array_type_table = lua_table.get_table_field("ArrayProperty").get_table_field("Type");
+                    property_info.array_inner.name = array_type_table.get_string_field("Name");
                     property_info.array_inner.size = verify_and_convert_int64_to_int32("ArrayProperty", "Type", "Size");
-                    property_info.array_inner.ffieldclass_pointer =
-                            reinterpret_cast<void*>(lua_table.get_table_field("ArrayProperty").get_table_field("Type").get_int_field("FFieldClassPointer"));
-                    property_info.array_inner.static_pointer =
-                            reinterpret_cast<void*>(lua_table.get_table_field("ArrayProperty").get_table_field("Type").get_int_field("StaticPointer"));
+                    property_info.array_inner.ffieldclass_pointer = get_lightuserdata_field(array_type_table, "FFieldClassPointer");
+                    property_info.array_inner.static_pointer = reinterpret_cast<void*>(array_type_table.get_int_field("StaticPointer"));
                 }
             }
 
@@ -4953,15 +4975,8 @@ Overloads:
 
     auto static is_unreal_version_out_of_bounds_from_64bit(int64_t major_version, int64_t minor_version) -> bool
     {
-        if (major_version < std::numeric_limits<uint32_t>::min() || major_version > std::numeric_limits<uint32_t>::max() ||
-            minor_version < std::numeric_limits<uint32_t>::min() || minor_version > std::numeric_limits<uint32_t>::max())
-        {
-            return false;
-        }
-        else
-        {
-            return true;
-        }
+        return (major_version < std::numeric_limits<uint32_t>::min() || major_version > std::numeric_limits<uint32_t>::max() ||
+                minor_version < std::numeric_limits<uint32_t>::min() || minor_version > std::numeric_limits<uint32_t>::max());
     };
 
     using UnrealVersionCheckFunctionPtr = bool (*)(int32_t, int32_t);
@@ -4984,7 +4999,7 @@ Overloads:
         int64_t major_version = lua.get_integer();
         int64_t minor_version = lua.get_integer();
 
-        if (!is_unreal_version_out_of_bounds_from_64bit(major_version, minor_version))
+        if (is_unreal_version_out_of_bounds_from_64bit(major_version, minor_version))
         {
             lua.throw_error("[UnrealVersion::unreal_version_check] Major/minor version numbers must be within the range of uint32");
         }
@@ -5497,6 +5512,24 @@ Overloads:
             return action.lua == m_hook_lua;
         });
 
+        if (m_hook_lua_ref != LUA_REFNIL)
+        {
+            luaL_unref(m_lua.get_lua_state(), LUA_REGISTRYINDEX, m_hook_lua_ref);
+            m_hook_lua_ref = LUA_REFNIL;
+        }
+
+        if (m_main_lua_ref != LUA_REFNIL)
+        {
+            luaL_unref(m_lua.get_lua_state(), LUA_REGISTRYINDEX, m_main_lua_ref);
+            m_main_lua_ref = LUA_REFNIL;
+        }
+
+        if (m_async_lua_ref != LUA_REFNIL)
+        {
+            luaL_unref(m_lua.get_lua_state(), LUA_REGISTRYINDEX, m_async_lua_ref);
+            m_async_lua_ref = LUA_REFNIL;
+        }
+
         if (m_hook_lua != nullptr)
         {
             m_hook_lua = nullptr; // lua_newthread results are handled by lua GC
@@ -5896,11 +5929,6 @@ Overloads:
                             LuaType::auto_construct_object(*callback_data.lua, constructed_object);
                             callback_data.lua->call_function(1, 1);
                             cancel = callback_data.lua->is_bool(-1) && callback_data.lua->get_bool(-1);
-                            if (cancel)
-                            {
-                                // Release the thread_ref to GC.
-                                luaL_unref(callback_data.lua->get_lua_state(), LUA_REGISTRYINDEX, callback_data.lua_callback_thread_ref);
-                            }
                         }
 
                         return cancel;
